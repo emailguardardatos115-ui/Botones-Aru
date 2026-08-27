@@ -495,6 +495,7 @@ const html = `<title>Botones Sonoros para ARu</title>
 <script>
   (function () {
     var PAGE_TEMPLATE = "__PAGE_TEMPLATE__";
+    var LOCAL_STORAGE_KEY = 'botonesAruLocalState';
     var initialStateEl = document.getElementById('stateData');
     var state;
     try {
@@ -502,6 +503,10 @@ const html = `<title>Botones Sonoros para ARu</title>
     } catch (e) {
       state = { customButtons: [], overrides: {}, deletedBuiltins: [] };
     }
+    try {
+      var localRaw = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (localRaw) state = JSON.parse(localRaw);
+    } catch (e) {}
     if (!state.customButtons) state.customButtons = [];
     if (!state.overrides) state.overrides = {};
     if (!state.deletedBuiltins) state.deletedBuiltins = [];
@@ -544,10 +549,19 @@ const html = `<title>Botones Sonoros para ARu</title>
       }, 2600);
     }
 
+    function persistLocal() {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(state));
+        showSyncStatus('Guardado en este dispositivo (este enlace no admite guardado compartido).');
+      } catch (e) {
+        showSyncStatus('No se pudo guardar el cambio.');
+      }
+    }
+
     function persistState() {
       return artifactCapPromise.then(function (cap) {
         if (!cap) {
-          showSyncStatus('Este panel no admite guardado compartido aquí; el cambio solo se ve en este dispositivo.');
+          persistLocal();
           return;
         }
         return cap.publish(buildPublishHtml(state)).catch(function (err) {
@@ -1329,4 +1343,5 @@ let finalHtml = replaceFirst(bodyTemplate, '__STATE_JSON__', initialStateJson);
 finalHtml = replaceFirst(finalHtml, '__PAGE_TEMPLATE__', templateInner);
 
 writeFileSync(path.join(__dirname, 'el-veredicto.html'), finalHtml, 'utf8');
+writeFileSync(path.join(__dirname, 'index.html'), finalHtml, 'utf8');
 console.log('written, length', finalHtml.length);

@@ -428,6 +428,17 @@
   </form>
 </dialog>
 
+<dialog id="confirmDialog" class="add-dialog">
+  <div class="add-form">
+    <h2>¿Eliminar este botón?</h2>
+    <p class="duration-hint">Esta acción no se puede deshacer.</p>
+    <div class="dialog-actions">
+      <button type="button" id="confirmCancelBtn" class="ghost-btn">Cancelar</button>
+      <button type="button" id="confirmOkBtn" class="primary-btn">Eliminar</button>
+    </div>
+  </div>
+</dialog>
+
 <p class="visually-hidden" id="status" aria-live="polite"></p>
 <div class="flash" id="flash" aria-hidden="true"></div>
 
@@ -575,6 +586,34 @@
     });
 
     var padEl = document.querySelector('.pad');
+    var confirmDialog = document.getElementById('confirmDialog');
+    var confirmCancelBtn = document.getElementById('confirmCancelBtn');
+    var confirmOkBtn = document.getElementById('confirmOkBtn');
+    var confirmResolve = null;
+
+    function askConfirm() {
+      confirmDialog.showModal();
+      return new Promise(function (resolve) {
+        confirmResolve = resolve;
+      });
+    }
+
+    confirmCancelBtn.addEventListener('click', function () {
+      confirmDialog.close();
+      if (confirmResolve) {
+        confirmResolve(false);
+        confirmResolve = null;
+      }
+    });
+
+    confirmOkBtn.addEventListener('click', function () {
+      confirmDialog.close();
+      if (confirmResolve) {
+        confirmResolve(true);
+        confirmResolve = null;
+      }
+    });
+
     var addBtn = document.getElementById('addBtn');
     var addDialog = document.getElementById('addDialog');
     var addForm = document.getElementById('addForm');
@@ -1057,13 +1096,15 @@
       var deleteTarget = evt.target.closest('[data-delete]');
       if (deleteTarget) {
         var key = deleteTarget.getAttribute('data-delete');
-        if (!window.confirm('¿Eliminar este botón?')) return;
-        if (key.indexOf('custom-') === 0) {
-          var wrap = deleteTarget.closest('.btn-wrap');
-          removeCustomButton(key, wrap, audioEls[key]);
-        } else {
-          deleteBuiltin(key);
-        }
+        var wrapForDelete = deleteTarget.closest('.btn-wrap');
+        askConfirm().then(function (ok) {
+          if (!ok) return;
+          if (key.indexOf('custom-') === 0) {
+            removeCustomButton(key, wrapForDelete, audioEls[key]);
+          } else {
+            deleteBuiltin(key);
+          }
+        });
       }
     });
 

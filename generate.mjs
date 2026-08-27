@@ -334,6 +334,30 @@ const html = `<title>Botones Sonoros para ARu</title>
   .ctrl-btn:active { transform: scale(0.88); }
   .ctrl-btn--delete { color: var(--fail-glow); }
 
+  .sync-status {
+    position: fixed;
+    left: 50%;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    transform: translate(-50%, 12px);
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 16px;
+    border-radius: 999px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 60;
+    max-width: 86vw;
+    text-align: center;
+  }
+  .sync-status.is-visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
   .visually-hidden {
     position: absolute;
     width: 1px;
@@ -456,8 +480,11 @@ const html = `<title>Botones Sonoros para ARu</title>
   </div>
 </dialog>
 
+<script type="application/json" id="stateData">__STATE_JSON__</script>
+
 <p class="visually-hidden" id="status" aria-live="polite"></p>
 <div class="flash" id="flash" aria-hidden="true"></div>
+<div class="sync-status" id="syncStatusEl" role="status"></div>
 
 <audio data-key="pp" preload="auto" src="data:audio/mp4;base64,${PP_B64}"></audio>
 <audio data-key="drum" preload="auto" src="data:audio/mp4;base64,${DRUM_B64}"></audio>
@@ -467,6 +494,80 @@ const html = `<title>Botones Sonoros para ARu</title>
 
 <script>
   (function () {
+    var PAGE_TEMPLATE = "__PAGE_TEMPLATE__";
+    var initialStateEl = document.getElementById('stateData');
+    var state;
+    try {
+      state = JSON.parse(initialStateEl.textContent);
+    } catch (e) {
+      state = { customButtons: [], overrides: {}, deletedBuiltins: [] };
+    }
+    if (!state.customButtons) state.customButtons = [];
+    if (!state.overrides) state.overrides = {};
+    if (!state.deletedBuiltins) state.deletedBuiltins = [];
+
+    var artifactCapPromise = (window.claude && typeof window.claude.use === 'function')
+      ? window.claude.use('artifact')
+      : Promise.resolve(null);
+
+    function jsonForScriptTag(value) {
+      return JSON.stringify(value).replace(/</g, '\\\\u003c');
+    }
+
+    function jsStringLiteralInner(str) {
+      return JSON.stringify(str).slice(1, -1).replace(/</g, '\\\\u003c');
+    }
+
+    function replaceFirst(str, marker, value) {
+      var i = str.indexOf(marker);
+      if (i === -1) return str;
+      return str.slice(0, i) + value + str.slice(i + marker.length);
+    }
+
+    function buildPublishHtml(newState) {
+      var stateSlot = jsonForScriptTag(newState);
+      var templateSlot = jsStringLiteralInner(PAGE_TEMPLATE);
+      var body = replaceFirst(PAGE_TEMPLATE, '__STATE_JSON__', stateSlot);
+      body = replaceFirst(body, '__PAGE_TEMPLATE__', templateSlot);
+      return '<!doctype html>\\n' + body;
+    }
+
+    var syncStatusEl = null;
+
+    function showSyncStatus(msg) {
+      if (!syncStatusEl) return;
+      syncStatusEl.textContent = msg;
+      syncStatusEl.classList.add('is-visible');
+      clearTimeout(showSyncStatus._t);
+      showSyncStatus._t = setTimeout(function () {
+        syncStatusEl.classList.remove('is-visible');
+      }, 2600);
+    }
+
+    function persistState() {
+      return artifactCapPromise.then(function (cap) {
+        if (!cap) {
+          showSyncStatus('Este panel no admite guardado compartido aquí; el cambio solo se ve en este dispositivo.');
+          return;
+        }
+        return cap.publish(buildPublishHtml(state)).catch(function (err) {
+          var code = err && err.code;
+          if (code === 'conflict') {
+            showSyncStatus('Alguien más actualizó el panel a la vez; recargando con lo último.');
+            return;
+          }
+          if (code === 'not_granted' || code === 'not_writer') {
+            showSyncStatus('No tienes permiso de edición sobre este panel compartido. Recargando.');
+          } else {
+            showSyncStatus('No se pudo guardar el cambio para todos. Recargando.');
+          }
+          setTimeout(function () {
+            window.location.reload();
+          }, 1800);
+        });
+      });
+    }
+
     var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var audioCtx = null;
 
@@ -572,6 +673,7 @@ const html = `<title>Botones Sonoros para ARu</title>
 
     var flashEl = document.getElementById('flash');
     var statusEl = document.getElementById('status');
+    syncStatusEl = document.getElementById('syncStatusEl');
 
     function flash(key) {
       if (reducedMotion) return;
@@ -670,49 +772,6 @@ const html = `<title>Botones Sonoros para ARu</title>
     var rafScheduled = false;
     var previewSource = null;
     var isPreviewPlaying = false;
-
-    var CUSTOM_STORAGE_KEY = 'elVeredictoCustomButtons';
-    var OVERRIDES_STORAGE_KEY = 'elVeredictoOverrides';
-    var DELETED_STORAGE_KEY = 'elVeredictoDeletedBuiltins';
-
-    function loadCustomButtons() {
-      try {
-        var raw = localStorage.getItem(CUSTOM_STORAGE_KEY);
-        return raw ? JSON.parse(raw) : [];
-      } catch (e) {
-        return [];
-      }
-    }
-
-    function loadOverrides() {
-      try {
-        var raw = localStorage.getItem(OVERRIDES_STORAGE_KEY);
-        return raw ? JSON.parse(raw) : {};
-      } catch (e) {
-        return {};
-      }
-    }
-
-    function saveOverrides(overrides) {
-      localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
-    }
-
-    function loadDeletedBuiltins() {
-      try {
-        var raw = localStorage.getItem(DELETED_STORAGE_KEY);
-        return raw ? JSON.parse(raw) : [];
-      } catch (e) {
-        return [];
-      }
-    }
-
-    function saveDeletedBuiltins(list) {
-      localStorage.setItem(DELETED_STORAGE_KEY, JSON.stringify(list));
-    }
-
-    function saveCustomButtons(list) {
-      localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(list));
-    }
 
     function sliceBuffer(ctx, buffer, start, end) {
       var sampleRate = buffer.sampleRate;
@@ -977,19 +1036,17 @@ const html = `<title>Botones Sonoros para ARu</title>
     }
 
     function removeCustomButton(id, wrapEl, audioEl) {
-      var list = loadCustomButtons().filter(function (e) { return e.id !== id; });
-      saveCustomButtons(list);
+      state.customButtons = state.customButtons.filter(function (e) { return e.id !== id; });
       delete audioEls[id];
       delete flashColors[id];
       delete labels[id];
       if (wrapEl) wrapEl.remove();
       if (audioEl) audioEl.remove();
+      persistState();
     }
 
     function deleteBuiltin(key) {
-      var list = loadDeletedBuiltins();
-      if (list.indexOf(key) === -1) list.push(key);
-      saveDeletedBuiltins(list);
+      if (state.deletedBuiltins.indexOf(key) === -1) state.deletedBuiltins.push(key);
 
       var btnEl = padEl.querySelector('.btn[data-sound="' + key + '"]');
       var wrap = btnEl ? btnEl.closest('.btn-wrap') : null;
@@ -1000,26 +1057,23 @@ const html = `<title>Botones Sonoros para ARu</title>
       delete audioEls[key];
       delete flashColors[key];
       delete labels[key];
+      persistState();
     }
 
     function applyEdit(key, icon, wav) {
       if (key.indexOf('custom-') === 0) {
-        var list = loadCustomButtons();
         var entry = null;
-        for (var i = 0; i < list.length; i++) {
-          if (list[i].id === key) { entry = list[i]; break; }
+        for (var i = 0; i < state.customButtons.length; i++) {
+          if (state.customButtons[i].id === key) { entry = state.customButtons[i]; break; }
         }
         if (!entry) return;
         if (icon) entry.icon = icon;
         if (wav) entry.wav = wav;
-        saveCustomButtons(list);
       } else {
-        var overrides = loadOverrides();
-        var ov = overrides[key] || {};
+        var ov = state.overrides[key] || {};
         if (icon) ov.icon = icon;
         if (wav) ov.wav = wav;
-        overrides[key] = ov;
-        saveOverrides(overrides);
+        state.overrides[key] = ov;
       }
 
       var btnEl = padEl.querySelector('.btn[data-sound="' + key + '"]');
@@ -1028,6 +1082,7 @@ const html = `<title>Botones Sonoros para ARu</title>
         var audioEl = ensureAudioEl(key);
         audioEl.src = 'data:audio/wav;base64,' + wav;
       }
+      persistState();
     }
 
     function openEditDialog(key) {
@@ -1202,10 +1257,9 @@ const html = `<title>Botones Sonoros para ARu</title>
             icon: icon,
             wav: wavBase64
           };
-          var list = loadCustomButtons();
-          list.push(entry);
-          saveCustomButtons(list);
+          state.customButtons.push(entry);
           createCustomButtonEl(entry);
+          persistState();
         } else {
           applyEdit(editingKey, icon || null, wavBase64 || null);
         }
@@ -1228,7 +1282,7 @@ const html = `<title>Botones Sonoros para ARu</title>
 
     wireBuiltinControls();
 
-    loadDeletedBuiltins().forEach(function (key) {
+    state.deletedBuiltins.forEach(function (key) {
       var btnEl = padEl.querySelector('.btn[data-sound="' + key + '"]');
       var wrap = btnEl ? btnEl.closest('.btn-wrap') : null;
       if (wrap) wrap.remove();
@@ -1239,20 +1293,17 @@ const html = `<title>Botones Sonoros para ARu</title>
       delete labels[key];
     });
 
-    (function applyStoredOverrides() {
-      var overrides = loadOverrides();
-      Object.keys(overrides).forEach(function (key) {
-        var ov = overrides[key];
-        var btnEl = padEl.querySelector('.btn[data-sound="' + key + '"]');
-        if (btnEl && ov.icon) applyIconToButton(btnEl, ov.icon);
-        if (ov.wav) {
-          var audioEl = ensureAudioEl(key);
-          audioEl.src = 'data:audio/wav;base64,' + ov.wav;
-        }
-      });
-    })();
+    Object.keys(state.overrides).forEach(function (key) {
+      var ov = state.overrides[key];
+      var btnEl = padEl.querySelector('.btn[data-sound="' + key + '"]');
+      if (btnEl && ov.icon) applyIconToButton(btnEl, ov.icon);
+      if (ov.wav) {
+        var audioEl = ensureAudioEl(key);
+        audioEl.src = 'data:audio/wav;base64,' + ov.wav;
+      }
+    });
 
-    loadCustomButtons().forEach(createCustomButtonEl);
+    state.customButtons.forEach(createCustomButtonEl);
 
     try {
       if (window.navigator.standalone) {
@@ -1263,5 +1314,19 @@ const html = `<title>Botones Sonoros para ARu</title>
 </script>
 `;
 
-writeFileSync(path.join(__dirname, 'el-veredicto.html'), html, 'utf8');
-console.log('written, length', html.length);
+function replaceFirst(str, marker, value) {
+  const i = str.indexOf(marker);
+  if (i === -1) throw new Error(`marker not found: ${marker}`);
+  return str.slice(0, i) + value + str.slice(i + marker.length);
+}
+
+const bodyTemplate = html;
+const initialState = { customButtons: [], overrides: {}, deletedBuiltins: [] };
+const initialStateJson = JSON.stringify(initialState).replace(/</g, '\\u003c');
+const templateInner = JSON.stringify(bodyTemplate).slice(1, -1).replace(/</g, '\\u003c');
+
+let finalHtml = replaceFirst(bodyTemplate, '__STATE_JSON__', initialStateJson);
+finalHtml = replaceFirst(finalHtml, '__PAGE_TEMPLATE__', templateInner);
+
+writeFileSync(path.join(__dirname, 'el-veredicto.html'), finalHtml, 'utf8');
+console.log('written, length', finalHtml.length);
